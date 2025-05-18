@@ -1,16 +1,33 @@
-from auth.hmac import get_hmac_credentials
-from coinbase.wallet.client import Client
+from CoinbaseService.CoinbaseService import CoinbaseService
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import List
+from CoinbaseService.cb_hmac import get_hmac_credentials
 
-key_id, secret_id = get_hmac_credentials()
-client = Client(key_id, secret_id)
+@dataclass
+class Account:
+    id: str
+    balance: Decimal
+    currency: str
 
-def get_active_accounts():
-    """
-    Gets and returns the active wallets
-    (assets) associated on the account
-    """
+@dataclass
+class Portfolio:
+    net_value: Decimal
+    assets: List[Decimal]
+    
+    def __init__(self, service: CoinbaseService) -> "Portfolio":
+        self.assets = service.get_active_accounts()
+        total = Decimal("0")
+        for acct in self.assets:
+            # prices come back as strings, so wrap in Decimal
+            price_usd = Decimal(service.get_price(acct.currency))
+            total += acct.balance * price_usd
+        self.net_value = total
+
 def main():
-    print(get_active_accounts()) 
-
+    id, secret = get_hmac_credentials()
+    coinbase = CoinbaseService(id, secret)
+    portfolio = Portfolio(coinbase)
+    print(portfolio)
 if __name__ == '__main__':
     main()
