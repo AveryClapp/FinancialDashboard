@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import List
 from CoinbaseService.cb_hmac import get_hmac_credentials
+from db import get_session
 
 @dataclass
 class Account:
@@ -19,7 +20,6 @@ class Portfolio:
         self.assets = service.get_active_accounts()
         total = Decimal("0")
         for acct in self.assets:
-            # prices come back as strings, so wrap in Decimal
             price_usd = Decimal(service.get_price(acct.currency))
             total += acct.balance * price_usd
         self.net_value = total
@@ -28,6 +28,6 @@ def main():
     id, secret = get_hmac_credentials()
     coinbase = CoinbaseService(id, secret)
     portfolio = Portfolio(coinbase)
-    print(portfolio)
+
 if __name__ == '__main__':
     main()
