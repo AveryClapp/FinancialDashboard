@@ -128,6 +128,7 @@ class CoinbaseService:
         active_accts = self.get_active_accounts()
         for acct in active_accts:
             txs.extend(self.get_transactions(acct.id, limit))
+        print(txs)
         return txs; 
 
 if __name__ == "__main__":

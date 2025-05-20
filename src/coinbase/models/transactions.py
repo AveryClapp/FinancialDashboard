@@ -15,11 +15,6 @@ import enum
 Base = declarative_base()
 
 
-class TxType(enum.Enum):
-    buy = "buy"
-    sell = "sell"
-    reward = "reward"
-
 class Transaction(Base):
     __tablename__ = "transactions"
 
@@ -27,5 +22,5 @@ class Transaction(Base):
     asset    = Column(String(10), nullable=False)
     quantity = Column(Numeric(28, 8), nullable=False)
     cost_usd = Column(Numeric(28, 8), nullable=False)
-    tx_type  = Column(Enum(TxType), nullable=False)
+    tx_type = Column(String(32), nullable=False)
     tx_time  = Column(DateTime, nullable=False)

@@ -10,8 +10,6 @@ SessionLocal = sessionmaker(bind=engine,
                     autocommit=False,
                     future=True)
 
-
-@contextmanager
 def get_session():
     '''
     Utilize context manager semantics to create 
@@ -21,9 +19,5 @@ def get_session():
     session = SessionLocal()
     try:
         yield session
-        session.commit()
-    except:
-        session.rollback()
-        raise
     finally:
         session.close()

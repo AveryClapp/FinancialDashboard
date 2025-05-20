@@ -7,8 +7,11 @@ from decimal import Decimal
 from CoinbaseService.CoinbaseService import CoinbaseService
 from CoinbaseService.cb_hmac       import get_hmac_credentials
 from db                             import get_session
-from models.transactions            import Transaction, TxType
+from models.transactions            import Transaction
 from models.account_sync            import AccountSync
+
+from typing import List
+from pydantic import BaseModel
 
 router = APIRouter()
 
@@ -33,18 +36,28 @@ def read_portfolio(svc: CoinbaseService = Depends(get_coinbase_service)):
     # you can still use your @dataclass Portfolio internally, or inline:
     assets = svc.get_active_accounts()
     total = Decimal(0)
+    out_accts = []
     for a in assets:
         total += a.balance * svc.get_price(a.currency)
-    return PortfolioOut(net_value=total, assets=assets)
+        out_accts.append(
+            AccountOut(
+                id = a.id,
+                balance = a.balance,
+                currency = a.currency
+            )
+        )
+    return PortfolioOut(net_value=total, assets=out_accts)
 
 @router.post("/transactions/update")
 def list_txns(
     svc: CoinbaseService = Depends(get_coinbase_service),
     db: Session = Depends(get_session)
 ):
-    inserted = 0 
+    inserted = 0
+    all_syncs = { row.account_id: row 
+        for row in db.query(AccountSync).all() }
     for acct in svc.get_all_accounts():
-        sync  = db.get(AccountSync, acct.id)
+        sync = all_syncs.get(acct.id)     # O(1) in‐memory lookup, no SQL
         since = sync.last_tx_time if sync else None
         raw_txs = svc.get_transactions(acct.id, limit=250)
 
@@ -64,7 +77,7 @@ def list_txns(
                 asset    = tx["amount"]["currency"],
                 quantity = Decimal(tx["amount"]["amount"]),
                 cost_usd = Decimal(tx["native_amount"]["amount"]),
-                tx_type  = TxType(tx["type"]),
+                tx_type  = tx["type"],
                 tx_time  = tx_time,
             )
             db.add(orm_tx)
@@ -75,15 +88,18 @@ def list_txns(
                 db.rollback()
 
         newest_time = new_txs[-1][0]
-        if sync:
-            sync.last_tx_time = newest_time
+        if not sync:
+            sync = AccountSync(
+                account_id=acct.id, 
+                asset=tx["amount"]["currency"],
+                last_tx_time=newest_time
+            )
+            db.add(sync)
+            all_syncs[acct.id] = sync
         else:
-            db.add(AccountSync(
-                account_id   = acct.id,
-                last_tx_time = newest_time
-            ))
-        db.commit()
-    return inserted
+            sync.last_tx_time = newest_time
+    db.commit()
+    return {"new_transactions": inserted}
 if __name__ == '__main__':
     print(list_txns())
 """
