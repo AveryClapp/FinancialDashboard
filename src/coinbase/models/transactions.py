@@ -8,16 +8,8 @@ from sqlalchemy import (
     Enum,
     PrimaryKeyConstraint,
 )
-from sqlalchemy.orm import declarative_base, sessionmaker
 import enum
 
-DATABASE_URL = "mysql+pymysql://root:@localhost:3306/FinancialDashboard"
-
-engine = create_engine(DATABASE_URL, echo=True, future=True)
-SessionLocal = sessionmaker(bind=engine, 
-                    autoflush=False,
-                    autocommit=False,
-                    future=True)
 
 Base = declarative_base()
 

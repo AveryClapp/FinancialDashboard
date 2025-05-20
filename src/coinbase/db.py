@@ -1,4 +1,14 @@
 from contextlib import contextmanager
+from sqlalchemy.orm import declarative_base, sessionmaker
+
+DATABASE_URL = "mysql+pymysql://root:@localhost:3306/FinancialDashboard"
+
+engine = create_engine(DATABASE_URL, echo=True, future=True)
+SessionLocal = sessionmaker(bind=engine, 
+                    autoflush=False,
+                    autocommit=False,
+                    future=True)
+
 
 @contextmanager
 def get_session():

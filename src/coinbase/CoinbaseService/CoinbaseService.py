@@ -1,5 +1,6 @@
 from coinbase.wallet.client import Client
-from CoinbaseService.cb_jwt import create_jwt
+from cb_jwt import create_jwt
+from cb_hmac import get_hmac_credentials
 from decimal import Decimal
 from typing import List
 from dataclasses import dataclass
@@ -20,6 +21,11 @@ class CoinbaseService:
         # populate self.assets right away
         self.assets = self.get_active_accounts()
 
+    def _parse_transactions(self, transactions: List[dict]) -> List[dict]:
+        """
+        Reformats and parses transactions
+        """
+        # Compile 
     def _raw_accounts(self) -> List[dict]:
         """Internal: fetch raw list of account-dicts."""
         path = "/v2/accounts"
@@ -88,19 +94,27 @@ class CoinbaseService:
         amt = self._client.get_spot_price(currency_pair=sym)["amount"]
         return Decimal(amt)
 
-    def get_transactions(self, asset: str, limit: int = 15) -> List[dict]:
+    def get_transactions(self, id: str, limit: int = 10) -> List[dict]:
         """
-        Returns <limit> most recent transactions for the given asset.
+        Returns <limit> most recent transactions for the given asset id.
         """
-        acct_id = self.get_id(asset)
-        if not acct_id:
-            return []
-        path = f"/v2/accounts/{acct_id}/transactions"
+        path = f"/v2/accounts/{id}/transactions"
         token = create_jwt("GET", path)
         headers = {"Authorization": f"Bearer {token}"}
         url = self._base_url + path + f"?limit={limit}"
         return requests.get(url, headers=headers).json().get("data", [])
 
+    def get_all_transactions(self, limit: int = 100) -> List[dict]:
+        """
+        Returns all transactions for all active accounts
+        """
+        txs = []
+        active_accts = self.get_active_accounts()
+        for acct in active_accts:
+            txs.extend(self.get_transactions(acct.id, limit))
+        return txs; 
+
 if __name__ == "__main__":
     api_id, api_secret = get_hmac_credentials()
     svc = CoinbaseService(api_id, api_secret)
+    print(svc.get_all_transactions())

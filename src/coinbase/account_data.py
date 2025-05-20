@@ -31,3 +31,11 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+"""
+I want to have a record of recent transactions, which requires querying over all active accounts for probably like top 5 recent transactions and then displaying those and formatting them. 
+I want to display unrealized and realized P&L. This gets tricky, for realized P&L,I need to do a FIFO matching with the sell tx (price * quantity) and look at the first tx I had with that asset and find the difference. This means I need to store every transaction in the database. Lowk on some orderbook vibes with the fifo. 
+I want to also have a metric for average entry price which also requires querying all transactions on an asset. This must be updated when I sell (or not?).
+Everytime the function is called, it runs the whole algorithm (for all assets check tx). This can be optimized by checking if last_tx_id == most recent tx id and skipping the asset if so. If a new asset shows up, some sqlalchemy syntax will probably be able to check if the asset is in account_sync table. Don't need to check for selling more than i have but do need to always check for if i need to update or remove an entry. (I.E. I sell my whole supply of BTC, I should probably just delete the account_sync entry from it).
+"""
