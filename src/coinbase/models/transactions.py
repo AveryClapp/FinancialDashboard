@@ -8,6 +8,7 @@ from sqlalchemy import (
     Enum,
     PrimaryKeyConstraint,
 )
+from sqlalchemy.orm import declarative_base
 import enum
 
 
@@ -17,7 +18,7 @@ Base = declarative_base()
 class TxType(enum.Enum):
     buy = "buy"
     sell = "sell"
-
+    reward = "reward"
 
 class Transaction(Base):
     __tablename__ = "transactions"

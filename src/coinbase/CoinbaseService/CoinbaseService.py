@@ -1,10 +1,14 @@
 from coinbase.wallet.client import Client
-from cb_jwt import create_jwt
-from cb_hmac import get_hmac_credentials
+from CoinbaseService.cb_jwt import create_jwt
+from CoinbaseService.cb_hmac import get_hmac_credentials
 from decimal import Decimal
 from typing import List
 from dataclasses import dataclass
 import requests
+import os
+from dotenv import load_dotenv
+from dateutil.parser import isoparse
+from datetime import timezone
 
 @dataclass
 class Account:
@@ -16,16 +20,27 @@ class CoinbaseService:
     assets: List[Account]
 
     def __init__(self, api_id: str, api_secret: str):
+        load_dotenv()
+        _cutoff_raw = os.getenv("CUTOFF_DATE", "2000-01-01T00:00:00Z")
+        self._CUTOFF = isoparse(_cutoff_raw)
+        if self._CUTOFF.tzinfo is None:
+            self._CUTOFF = self._CUTOFF.replace(tzinfo=timezone.utc)
         self._client   = Client(api_id, api_secret)
         self._base_url = "https://api.coinbase.com"
         # populate self.assets right away
         self.assets = self.get_active_accounts()
 
-    def _parse_transactions(self, transactions: List[dict]) -> List[dict]:
+    def _clean_transactions(self, transactions: List[dict]) -> List[dict]:
         """
-        Reformats and parses transactions
-        """
-        # Compile 
+        Reformats and parses transactions based on type and date
+        """ 
+        return [
+            tx
+            for tx in transactions
+            if not ("staking" in tx.get("type"))
+                and isoparse(tx["created_at"]) >= self._CUTOFF
+        ]
+
     def _raw_accounts(self) -> List[dict]:
         """Internal: fetch raw list of account-dicts."""
         path = "/v2/accounts"
@@ -102,7 +117,8 @@ class CoinbaseService:
         token = create_jwt("GET", path)
         headers = {"Authorization": f"Bearer {token}"}
         url = self._base_url + path + f"?limit={limit}"
-        return requests.get(url, headers=headers).json().get("data", [])
+        resp = requests.get(url, headers=headers).json().get("data", [])
+        return self._clean_transactions(resp)
 
     def get_all_transactions(self, limit: int = 100) -> List[dict]:
         """
