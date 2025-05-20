@@ -118,7 +118,10 @@ class CoinbaseService:
         headers = {"Authorization": f"Bearer {token}"}
         url = self._base_url + path + f"?limit={limit}"
         resp = requests.get(url, headers=headers).json().get("data", [])
-        return self._clean_transactions(resp)
+        cleaned = self._clean_transactions(resp)
+        for a in cleaned:
+            a["account_id"] = id
+        return cleaned
 
     def get_all_transactions(self, limit: int = 100) -> List[dict]:
         """
@@ -128,7 +131,6 @@ class CoinbaseService:
         active_accts = self.get_active_accounts()
         for acct in active_accts:
             txs.extend(self.get_transactions(acct.id, limit))
-        print(txs)
         return txs; 
 
 if __name__ == "__main__":

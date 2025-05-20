@@ -24,3 +24,4 @@ class Transaction(Base):
     cost_usd = Column(Numeric(28, 8), nullable=False)
     tx_type = Column(String(32), nullable=False)
     tx_time  = Column(DateTime, nullable=False)
+    account_id = Column(String(64), nullable=False)    

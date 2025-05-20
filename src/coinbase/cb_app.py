@@ -79,6 +79,7 @@ def list_txns(
                 cost_usd = Decimal(tx["native_amount"]["amount"]),
                 tx_type  = tx["type"],
                 tx_time  = tx_time,
+                account_id = tx["account_id"]
             )
             db.add(orm_tx)
             try:
@@ -100,8 +101,23 @@ def list_txns(
             sync.last_tx_time = newest_time
     db.commit()
     return {"new_transactions": inserted}
-if __name__ == '__main__':
-    print(list_txns())
+
+@router.get("/average_entry/{account_id}")
+def calculate_avg_entry(db: Session = Depends(get_session)):
+    """
+    Average the buy price (with weighting) of database 
+    entries corresponding to the account_id
+    """
+    # SELECT * FROM Transactions where asset == account_id (maybe a join here with account_sync?). Average buy price with weighting and return it.
+    total_cost_qty, total_qty = db.query(
+        func.sum(Transaction.quantity * Transaction.cost_usd),
+        func.sum(Transaction.quantity)
+    ).filter(
+        Transaction.account_id == account_id,
+        Transaction.asset      == asset,
+        Transaction.tx_type     == "buy",
+    ).one()
+    return (total_cost_qty, total_qty)
 """
 I want to have a record of recent transactions, which requires querying over all active accounts for probably like top 5 recent transactions and then displaying those and formatting them. 
 I want to display unrealized and realized P&L. This gets tricky, for realized P&L,I need to do a FIFO matching with the sell tx (price * quantity) and look at the first tx I had with that asset and find the difference. This means I need to store every transaction in the database. Lowk on some orderbook vibes with the fifo. 
