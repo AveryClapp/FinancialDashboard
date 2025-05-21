@@ -56,14 +56,13 @@ def list_txns(
         new_txs.sort(key=lambda pair: pair[0])
 
         for tx_time, tx in new_txs:
-            if tx["type"] == "trade" or if tx["amount"]["currency"] = "USD":
+            if tx["type"] == "trade" or tx["amount"]["currency"] == "USD":
                 continue
             orm_tx = Transaction(
                 tx_id    = tx["id"],
                 asset    = tx["amount"]["currency"],
                 quantity = abs(Decimal(tx["amount"]["amount"])),
                 cost_usd   = actual_amt(tx),
-                unit_price = tx["base_price"]
                 tx_type  = tx["type"],
                 tx_time  = tx_time,
                 account_id = tx["account_id"],
@@ -104,7 +103,7 @@ def actual_amt(tx):
     if tx["type"] == "buy":
         return Decimal(tx["buy"]["subtotal"]["amount"])
     elif tx["type"] == "sell":
-        return Decimal(tx["sell"]["total"]["amount"])
+        return Decimal(tx["sell"]["subtotal"]["amount"])
     
 def handle_sell(tx, db):
     """
@@ -113,7 +112,7 @@ def handle_sell(tx, db):
     accordingly.
     """
     qty_to_sell = tx.quantity
-    proceeds_total = tx.cost_usd
+    sell_price = tx.cost_usd / tx.quantity
     profit_total = Decimal('0')
 
     lots = (
@@ -135,11 +134,9 @@ def handle_sell(tx, db):
 
         match_qty = min(lot.remaining, qty_to_sell)
 
-        unit_cost    = lot.cost / lot.quantity
-        cost_basis   = unit_cost * match_qty
+        lot_price    = lot.cost / lot.quantity
 
-        proceeds_total -=  cost_basis
-
+        profit_total += (sell_price - lot_price) * match_qty
         lot.remaining -= match_qty
         if lot.remaining == 0:
             db.delete(lot)
@@ -154,7 +151,7 @@ def handle_sell(tx, db):
         asset = tx.asset,
         quantity = tx.quantity,
         proceeds = tx.cost_usd,
-        profit  = proceeds_total,
+        profit  = profit_total,
         broker = BrokerType.coinbase,
         matched_at = datetime.now(timezone.utc)
     )
@@ -204,44 +201,105 @@ def calculate_avg_entry(account_id: str, db: Session = Depends(get_session)):
 
     return total_cost / total_quantity
 
-###### TODO
 @router.get("/unrealized_gains")
-def unrealized_gains(account_id: str, db: Session = Depends(get_session)):
+def unrealized_gains_total(
+    svc: CoinbaseService = Depends(get_coinbase_service),
+    db: Session            = Depends(get_session),
+):
     """
-    Compares cost of portfolio versus current value
+    Total unrealized gain across all accounts & brokers.
+    """
+    lots = db.query(Lot).filter(Lot.remaining > 0).all()
+    total_cost = sum((l.cost / l.quantity) * l.remaining for l in lots)
+    total_value = sum(svc.get_price(l.asset) * l.remaining for l in lots)
+    return {
+        "total_cost":      total_cost,
+        "market_value":    total_value,
+        "unrealized_gain": total_value - total_cost,
+    }
+
+
+@router.get("/unrealized_gains/by_broker/{broker}")
+def unrealized_gains_by_broker(
+    broker: BrokerType,
+    svc: CoinbaseService = Depends(get_coinbase_service),
+    db: Session            = Depends(get_session),
+):
+    """
+    Unrealized gain broken out by broker.
     """
     lots = (
-        db.query(Lot).all()
+        db.query(Lot)
+          .filter(Lot.remaining > 0, Lot.broker == broker)
+          .all()
     )
-    total_cost = Decimal("0")
-    for lot in lots:
-        total_cost += lot.cost
-    # Total cost compared to current net_value TODO 
-    return total_cost
-   
+    total_cost = sum((l.cost / l.quantity) * l.remaining for l in lots)
+    total_value = sum(svc.get_price(l.asset) * l.remaining for l in lots)
+    return {
+        "broker":          broker.value,
+        "total_cost":      total_cost,
+        "market_value":    total_value,
+        "unrealized_gain": total_value - total_cost,
+    }
 
 
-#TODO add time horizons
+@router.get("/unrealized_gains/by_account/{account_id}")
+def unrealized_gains_by_account(
+    account_id: str,
+    svc: CoinbaseService = Depends(get_coinbase_service),
+    db: Session            = Depends(get_session),
+):
+    """
+    Unrealized gain for a single account.
+    """
+    lots = (
+        db.query(Lot)
+          .filter(Lot.remaining > 0, Lot.account_id == account_id)
+          .all()
+    )
+    total_cost = sum((l.cost / l.quantity) * l.remaining for l in lots)
+    total_value = sum(svc.get_price(l.asset) * l.remaining for l in lots)
+    return {
+        "account_id":      account_id,
+        "total_cost":      total_cost,
+        "market_value":    total_value,
+        "unrealized_gain": total_value - total_cost,
+    }
+
 @router.get("/realized_gains")
 def realized_gains(
-    svc: CoinbaseService = Depends(get_coinbase_service),
     db: Session = Depends(get_session)
 ):
-    pass
+    """
+    Sum up *all* realized gains across brokers/accounts.
+    """
+    total = db.query(func.coalesce(func.sum(Gain.profit), 0)).scalar()
+    return {"realized_gain": total}
 
-@router.get("/realized_gains/{broker}")
-def broker_realized_gains(
-    svc: CoinbaseService = Depends(get_coinbase_service),
-    db: Session = Depends(get_session)
-):
-    pass
+@router.get("/realized_gains/by_broker/{broker}")
+def broker_realized_gains( broker: BrokerType, db: Session = Depends(get_session)):
+    """
+    Sum realized gains filtered by broker.
+    """
+    total = (
+        db.query(func.coalesce(func.sum(Gain.profit), 0))
+          .filter(Gain.broker == broker)
+          .scalar()
+    )
+    return {"broker": broker.value, "realized_gain": total}
 
-@router.get("/realized_gains/{account_id}")
-def get_account_realized_gains(
-    svc: CoinbaseService = Depends(get_coinbase_service),
-    db: Session = Depends(get_session)
-):
-    pass
+@router.get("/realized_gains/by_account/{account_id}")
+def get_account_realized_gains(account_id: str, db: Session = Depends(get_session)):
+    """
+    Sum realized gains for a single account by joining Gain → Transaction.
+    """
+    total = (
+        db.query(func.coalesce(func.sum(Gain.profti), 0))
+          .join(Transaction, Transaction.tx_id == Gain.tx_id)
+          .filter(Transaction.account_id == account_id)
+          .scalar()
+    )
+    return {"account_id": account_id, "realized_gain": total}
 
 
 """
