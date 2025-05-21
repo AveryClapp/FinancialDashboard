@@ -1,14 +1,18 @@
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from dateutil.parser import isoparse
 from decimal import Decimal
+from sqlalchemy import and_
 
 from CoinbaseService.CoinbaseService import CoinbaseService
 from CoinbaseService.cb_hmac       import get_hmac_credentials
 from db                             import get_session
 from models.transactions            import Transaction, BrokerType
 from models.account_sync            import AccountSync
+from models.lot                     import Lot
+from models.gain                    import Gain
 
 from typing import List
 from pydantic import BaseModel
@@ -21,32 +25,10 @@ class AccountOut(BaseModel):
     balance: Decimal
     currency: str
 
-class PortfolioOut(BaseModel):
-    net_value: Decimal
-    assets: List[AccountOut]
-
 
 def get_coinbase_service() -> CoinbaseService:
     key, secret = get_hmac_credentials()
     return CoinbaseService(key, secret)
-
-
-@router.get("/portfolio", response_model=PortfolioOut)
-def read_portfolio(svc: CoinbaseService = Depends(get_coinbase_service)):
-    # you can still use your @dataclass Portfolio internally, or inline:
-    assets = svc.get_active_accounts()
-    total = Decimal(0)
-    out_accts = []
-    for a in assets:
-        total += a.balance * svc.get_price(a.currency)
-        out_accts.append(
-            AccountOut(
-                id = a.id,
-                balance = a.balance,
-                currency = a.currency
-            )
-        )
-    return PortfolioOut(net_value=total, assets=out_accts)
 
 @router.post("/transactions/update")
 def list_txns(
@@ -59,6 +41,8 @@ def list_txns(
     for acct in svc.get_all_accounts():
         sync = all_syncs.get(acct.id)     # O(1) in‐memory lookup, no SQL
         since = sync.last_tx_time if sync else None
+        if since and since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc) 
         raw_txs = svc.get_transactions(acct.id, limit=250)
 
         new_txs = []
@@ -72,16 +56,20 @@ def list_txns(
         new_txs.sort(key=lambda pair: pair[0])
 
         for tx_time, tx in new_txs:
+            if tx["type"] == "trade" or if tx["amount"]["currency"] = "USD":
+                continue
             orm_tx = Transaction(
                 tx_id    = tx["id"],
                 asset    = tx["amount"]["currency"],
-                quantity = Decimal(tx["amount"]["amount"]),
-                cost_usd = Decimal(tx["native_amount"]["amount"]),
+                quantity = abs(Decimal(tx["amount"]["amount"])),
+                cost_usd   = actual_amt(tx),
+                unit_price = tx["base_price"]
                 tx_type  = tx["type"],
                 tx_time  = tx_time,
                 account_id = tx["account_id"],
                 broker = BrokerType.coinbase
             )
+
             db.add(orm_tx)
             try:
                 db.flush()
@@ -105,26 +93,134 @@ def list_txns(
             all_syncs[acct.id] = sync
         else:
             sync.last_tx_time = newest_time
+
     db.commit()
     return {"new_transactions": inserted}
 
-def handle_sell (svc: CoinbaseService, db):
+def actual_amt(tx):
+    """
+    Compute actual amount of tx after fees
+    """
+    if tx["type"] == "buy":
+        return Decimal(tx["buy"]["subtotal"]["amount"])
+    elif tx["type"] == "sell":
+        return Decimal(tx["sell"]["total"]["amount"])
+    
+def handle_sell(tx, db):
     """
     Sell an asset matching a buy transaction with 
     FIFO logic. Updating database entries and P&Ls 
     accordingly.
     """
-def handle_buy (svc: CoinbaseService, db):
+    qty_to_sell = tx.quantity
+    proceeds_total = tx.cost_usd
+    profit_total = Decimal('0')
+
+    lots = (
+        db.query(Lot)
+          .filter(
+              and_(
+                  Lot.account_id == tx.account_id,
+                  Lot.asset      == tx.asset,
+                  Lot.remaining  > 0
+              )
+          )
+          .order_by(Lot.buy_time)
+          .all()
+    )
+
+    for lot in lots:
+        if qty_to_sell <= 0:
+            break
+
+        match_qty = min(lot.remaining, qty_to_sell)
+
+        unit_cost    = lot.cost / lot.quantity
+        cost_basis   = unit_cost * match_qty
+
+        proceeds_total -=  cost_basis
+
+        lot.remaining -= match_qty
+        if lot.remaining == 0:
+            db.delete(lot)
+
+        qty_to_sell -= match_qty
+
+    if qty_to_sell > 0:
+        raise ValueError(f"Not enough {tx.asset} to sell – {qty_to_sell} units short")
+
+    total_gain = Gain(
+        tx_id = tx.tx_id,
+        asset = tx.asset,
+        quantity = tx.quantity,
+        proceeds = tx.cost_usd,
+        profit  = proceeds_total,
+        broker = BrokerType.coinbase,
+        matched_at = datetime.now(timezone.utc)
+    )
+
+    db.add(total_gain)
+    db.commit()
+
+def handle_buy (tx, db):
     """
     Buy an asset and record it in transactions
     """
+    buy_lot = Lot(
+        account_id = tx.account_id,
+        tx_id = tx.tx_id,
+        asset = tx.asset,
+        quantity = tx.quantity,
+        cost = tx.cost_usd,
+        remaining = tx.quantity,
+        broker = BrokerType.coinbase,
+        buy_time = datetime.now(timezone.utc)
+    )
+    db.add(buy_lot)
+    db.commit()
+
+
 @router.get("/average_entry/{account_id}")
-def calculate_avg_entry(db: Session = Depends(get_session)):
+def calculate_avg_entry(account_id: str, db: Session = Depends(get_session)):
     """
     Average the buy price (with weighting) of database 
     entries corresponding to the account_id
     """
-    # From the lots table 
+    lots = (
+        db.query(Lot)
+          .filter(
+              and_(
+                  Lot.account_id == account_id,
+                  Lot.remaining  > 0
+              )
+          )
+          .all()
+    )
+    total_cost = Decimal("0")
+    total_quantity = Decimal("0")
+    for lot in lots:
+        total_cost += lot.cost
+        total_quantity += lot.quantity
+
+    return total_cost / total_quantity
+
+###### TODO
+@router.get("/unrealized_gains")
+def unrealized_gains(account_id: str, db: Session = Depends(get_session)):
+    """
+    Compares cost of portfolio versus current value
+    """
+    lots = (
+        db.query(Lot).all()
+    )
+    total_cost = Decimal("0")
+    for lot in lots:
+        total_cost += lot.cost
+    # Total cost compared to current net_value TODO 
+    return total_cost
+   
+
+
 #TODO add time horizons
 @router.get("/realized_gains")
 def realized_gains(
@@ -140,7 +236,8 @@ def broker_realized_gains(
 ):
     pass
 
-@router.get("/realized_gains/{account_id"}
+@router.get("/realized_gains/{account_id}")
+def get_account_realized_gains(
     svc: CoinbaseService = Depends(get_coinbase_service),
     db: Session = Depends(get_session)
 ):

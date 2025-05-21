@@ -1,6 +1,6 @@
 from coinbase.wallet.client import Client
-from CoinbaseService.cb_jwt import create_jwt
-from CoinbaseService.cb_hmac import get_hmac_credentials
+from cb_jwt import create_jwt
+from cb_hmac import get_hmac_credentials
 from decimal import Decimal
 from typing import List
 from dataclasses import dataclass
@@ -8,7 +8,7 @@ import requests
 import os
 from dotenv import load_dotenv
 from dateutil.parser import isoparse
-from datetime import timezone
+from datetime import datetime, timezone, timedelta
 
 @dataclass
 class Account:
@@ -25,6 +25,7 @@ class CoinbaseService:
         self._CUTOFF = isoparse(_cutoff_raw)
         if self._CUTOFF.tzinfo is None:
             self._CUTOFF = self._CUTOFF.replace(tzinfo=timezone.utc)
+        self._CUTOFF = datetime.now(timezone.utc) - timedelta(minutes=31)
         self._client   = Client(api_id, api_secret)
         self._base_url = "https://api.coinbase.com"
         # populate self.assets right away
@@ -120,6 +121,7 @@ class CoinbaseService:
         resp = requests.get(url, headers=headers).json().get("data", [])
         cleaned = self._clean_transactions(resp)
         for a in cleaned:
+            print(a["network"])
             a["account_id"] = id
         return cleaned
 
@@ -134,6 +136,7 @@ class CoinbaseService:
         return txs; 
 
 if __name__ == "__main__":
+    dt = isoparse("2025-05-21T16:01:27Z")
     api_id, api_secret = get_hmac_credentials()
     svc = CoinbaseService(api_id, api_secret)
-    print(svc.get_all_transactions())
+    print(svc.get_buy_price("7e361484-8b9b-5e01-b0a9-70d23092e22f", "300736df-6ef3-58a9-b993-aa1cd5154d21", True))

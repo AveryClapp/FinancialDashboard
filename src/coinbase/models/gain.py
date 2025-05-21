@@ -1,6 +1,7 @@
 from sqlalchemy import (
     Column,
     String,
+    Integer,
     Numeric,
     DateTime,
     Enum as SQLEnum,
@@ -17,8 +18,7 @@ class Gain(Base):
     tx_id       = Column(String(64), nullable=False)
     asset       = Column(String(64), nullable=False)
     quantity = Column(Numeric(28,8), nullable=False)
-    sell_price  = Column(Numeric(28,8), nullable=False)
-    cost    = Column(Numeric(28,8), nullable=False)
-    gain    = Column(Numeric(28,8), nullable=False)
+    proceeds  = Column(Numeric(28,8), nullable=False)
+    profit    = Column(Numeric(28,8), nullable=False)
     broker     = Column(SQLEnum(BrokerType), nullable=False)
     matched_at = Column(DateTime(timezone=True), nullable=False)
