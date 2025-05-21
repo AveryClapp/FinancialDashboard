@@ -7,7 +7,7 @@ from decimal import Decimal
 from CoinbaseService.CoinbaseService import CoinbaseService
 from CoinbaseService.cb_hmac       import get_hmac_credentials
 from db                             import get_session
-from models.transactions            import Transaction
+from models.transactions            import Transaction, BrokerType
 from models.account_sync            import AccountSync
 
 from typing import List
@@ -79,7 +79,8 @@ def list_txns(
                 cost_usd = Decimal(tx["native_amount"]["amount"]),
                 tx_type  = tx["type"],
                 tx_time  = tx_time,
-                account_id = tx["account_id"]
+                account_id = tx["account_id"],
+                broker = BrokerType.coinbase
             )
             db.add(orm_tx)
             try:
@@ -88,6 +89,11 @@ def list_txns(
             except IntegrityError:
                 db.rollback()
 
+            # Nothing to do for a buy (besides update avg_buy_price)
+            if orm_tx.tx_type == "sell":
+                handle_sell(orm_tx, db)
+            if orm_tx.tx_type == "buy":
+                handle_buy(orm_tx, db)
         newest_time = new_txs[-1][0]
         if not sync:
             sync = AccountSync(
@@ -102,25 +108,47 @@ def list_txns(
     db.commit()
     return {"new_transactions": inserted}
 
+def handle_sell (svc: CoinbaseService, db):
+    """
+    Sell an asset matching a buy transaction with 
+    FIFO logic. Updating database entries and P&Ls 
+    accordingly.
+    """
+def handle_buy (svc: CoinbaseService, db):
+    """
+    Buy an asset and record it in transactions
+    """
 @router.get("/average_entry/{account_id}")
 def calculate_avg_entry(db: Session = Depends(get_session)):
     """
     Average the buy price (with weighting) of database 
     entries corresponding to the account_id
     """
-    # SELECT * FROM Transactions where asset == account_id (maybe a join here with account_sync?). Average buy price with weighting and return it.
-    total_cost_qty, total_qty = db.query(
-        func.sum(Transaction.quantity * Transaction.cost_usd),
-        func.sum(Transaction.quantity)
-    ).filter(
-        Transaction.account_id == account_id,
-        Transaction.asset      == asset,
-        Transaction.tx_type     == "buy",
-    ).one()
-    return (total_cost_qty, total_qty)
+    # From the lots table 
+#TODO add time horizons
+@router.get("/realized_gains")
+def realized_gains(
+    svc: CoinbaseService = Depends(get_coinbase_service),
+    db: Session = Depends(get_session)
+):
+    pass
+
+@router.get("/realized_gains/{broker}")
+def broker_realized_gains(
+    svc: CoinbaseService = Depends(get_coinbase_service),
+    db: Session = Depends(get_session)
+):
+    pass
+
+@router.get("/realized_gains/{account_id"}
+    svc: CoinbaseService = Depends(get_coinbase_service),
+    db: Session = Depends(get_session)
+):
+    pass
+
+
 """
-I want to have a record of recent transactions, which requires querying over all active accounts for probably like top 5 recent transactions and then displaying those and formatting them. 
 I want to display unrealized and realized P&L. This gets tricky, for realized P&L,I need to do a FIFO matching with the sell tx (price * quantity) and look at the first tx I had with that asset and find the difference. This means I need to store every transaction in the database. Lowk on some orderbook vibes with the fifo. 
 I want to also have a metric for average entry price which also requires querying all transactions on an asset. This must be updated when I sell (or not?).
-Everytime the function is called, it runs the whole algorithm (for all assets check tx). This can be optimized by checking if last_tx_id == most recent tx id and skipping the asset if so. If a new asset shows up, some sqlalchemy syntax will probably be able to check if the asset is in account_sync table. Don't need to check for selling more than i have but do need to always check for if i need to update or remove an entry. (I.E. I sell my whole supply of BTC, I should probably just delete the account_sync entry from it).
+Everytime the function is called, it runs the whole algorithm (for all assets check tx). This can be optimized by checking if last_tx_id == most recent tx id and skipping the asset if so. If a new asset shows up, some sqlalchemy syntax will probably be able to check if the asset is in account_sync table. Don't need to check for selling more than i have but do need to always check for if i need to update or remove an entry. (I.E. I sell my whole supply of BTC, I should probably just delete the account_sync entry from it). Buys and sells are detected with account_sync and handled. 
 """

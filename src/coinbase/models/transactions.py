@@ -1,18 +1,20 @@
 import os
 from sqlalchemy import (
-    create_engine,
     Column,
     String,
     Numeric,
     DateTime,
-    Enum,
+    Enum as SQLEnum,
     PrimaryKeyConstraint,
 )
 from sqlalchemy.orm import declarative_base
-import enum
-
+from enum import Enum
 
 Base = declarative_base()
+
+class BrokerType(Enum):
+    coinbase = "coinbase"
+    schwab = "schwab"
 
 
 class Transaction(Base):
@@ -25,3 +27,4 @@ class Transaction(Base):
     tx_type = Column(String(32), nullable=False)
     tx_time  = Column(DateTime, nullable=False)
     account_id = Column(String(64), nullable=False)    
+    broker     = Column(SQLEnum(BrokerType), nullable=False)
