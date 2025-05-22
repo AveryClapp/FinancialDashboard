@@ -5,7 +5,6 @@ from sqlalchemy.exc import IntegrityError
 from dateutil.parser import isoparse
 from decimal import Decimal
 from sqlalchemy import and_, func
-
 from CoinbaseService.CoinbaseService import CoinbaseService
 from CoinbaseService.cb_hmac       import get_hmac_credentials
 from db                             import get_session
@@ -13,23 +12,16 @@ from models.transactions            import Transaction, BrokerType
 from models.account_sync            import AccountSync
 from models.lot                     import Lot
 from models.gain                    import Gain
-
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
-
 router = APIRouter()
-
-
 class AccountOut(BaseModel):
     id: str
     balance: Decimal
     currency: str
-
-
 def get_coinbase_service() -> CoinbaseService:
     key, secret = get_hmac_credentials()
     return CoinbaseService(key, secret)
-
 @router.post("/transactions/cb_update")
 def update_txns(
     svc: CoinbaseService = Depends(get_coinbase_service),
@@ -44,7 +36,6 @@ def update_txns(
         if since and since.tzinfo is None:
             since = since.replace(tzinfo=timezone.utc) 
         raw_txs = svc.get_transactions(acct.id, limit=250)
-
         new_txs = []
         for tx in raw_txs:
             tx_time = isoparse(tx["created_at"])
@@ -52,9 +43,7 @@ def update_txns(
                 new_txs.append((tx_time, tx))
         if not new_txs:
             continue
-
         new_txs.sort(key=lambda pair: pair[0])
-
         for tx_time, tx in new_txs:
             if tx["type"] == "trade" or tx["amount"]["currency"] == "USD":
                 continue
@@ -68,14 +57,12 @@ def update_txns(
                 account_id = tx["account_id"],
                 broker = BrokerType.coinbase
             )
-
             db.add(orm_tx)
             try:
                 db.flush()
                 inserted += 1
             except IntegrityError:
                 db.rollback()
-
             # Nothing to do for a buy (besides update avg_buy_price)
             if orm_tx.tx_type == "sell":
                 handle_sell(orm_tx, db)
@@ -92,10 +79,8 @@ def update_txns(
             all_syncs[acct.id] = sync
         else:
             sync.last_tx_time = newest_time
-
     db.commit()
     return {"new_transactions": inserted}
-
 def actual_amt(tx):
     """
     Compute actual amount of tx after fees
@@ -114,7 +99,6 @@ def handle_sell(tx, db):
     qty_to_sell = tx.quantity
     sell_price = tx.cost_usd / tx.quantity
     profit_total = Decimal('0')
-
     lots = (
         db.query(Lot)
           .filter(
@@ -127,25 +111,18 @@ def handle_sell(tx, db):
           .order_by(Lot.buy_time)
           .all()
     )
-
     for lot in lots:
         if qty_to_sell <= 0:
             break
-
         match_qty = min(lot.remaining, qty_to_sell)
-
         lot_price    = lot.cost / lot.quantity
-
         profit_total += (sell_price - lot_price) * match_qty
         lot.remaining -= match_qty
         if lot.remaining == 0:
             db.delete(lot)
-
         qty_to_sell -= match_qty
-
     if qty_to_sell > 0:
         raise ValueError(f"Not enough {tx.asset} to sell – {qty_to_sell} units short")
-
     total_gain = Gain(
         tx_id = tx.tx_id,
         asset = tx.asset,
@@ -155,10 +132,8 @@ def handle_sell(tx, db):
         broker = BrokerType.coinbase,
         matched_at = datetime.now(timezone.utc)
     )
-
     db.add(total_gain)
     db.commit()
-
 def handle_buy (tx, db):
     """
     Buy an asset and record it in transactions
@@ -175,8 +150,6 @@ def handle_buy (tx, db):
     )
     db.add(buy_lot)
     db.commit()
-
-
 @router.get("/average_entry/{account_id}")
 def calculate_avg_entry(account_id: str, db: Session = Depends(get_session)):
     """
@@ -198,18 +171,20 @@ def calculate_avg_entry(account_id: str, db: Session = Depends(get_session)):
     for lot in lots:
         total_cost += lot.cost
         total_quantity += lot.quantity
-
     return total_cost / total_quantity
-
 @router.get("/unrealized_gains")
 def unrealized_gains_total(
+    brokers: Optional[List[BrokerType]] = Query(default=None),
     svc: CoinbaseService = Depends(get_coinbase_service),
     db: Session            = Depends(get_session),
 ):
     """
     Total unrealized gain across all accounts & brokers.
     """
-    lots = db.query(Lot).filter(Lot.remaining > 0).all()
+    query = db.query(Lot).filter(Lot.remaining > 0)
+    if brokers:
+        query = query.filter(Lot.broker.in_(brokers))
+    lots = query.all()
     total_cost = sum((l.cost / l.quantity) * l.remaining for l in lots)
     total_value = sum(svc.get_price(l.asset) * l.remaining for l in lots)
     return {
@@ -217,32 +192,6 @@ def unrealized_gains_total(
         "market_value":    total_value,
         "unrealized_gain": total_value - total_cost,
     }
-
-
-@router.get("/unrealized_gains/by_broker/{broker}")
-def unrealized_gains_by_broker(
-    broker: BrokerType,
-    svc: CoinbaseService = Depends(get_coinbase_service),
-    db: Session            = Depends(get_session),
-):
-    """
-    Unrealized gain broken out by broker.
-    """
-    lots = (
-        db.query(Lot)
-          .filter(Lot.remaining > 0, Lot.broker == broker)
-          .all()
-    )
-    total_cost = sum((l.cost / l.quantity) * l.remaining for l in lots)
-    total_value = sum(svc.get_price(l.asset) * l.remaining for l in lots)
-    return {
-        "broker":          broker.value,
-        "total_cost":      total_cost,
-        "market_value":    total_value,
-        "unrealized_gain": total_value - total_cost,
-    }
-
-
 @router.get("/unrealized_gains/by_account/{account_id}")
 def unrealized_gains_by_account(
     account_id: str,
@@ -265,29 +214,25 @@ def unrealized_gains_by_account(
         "market_value":    total_value,
         "unrealized_gain": total_value - total_cost,
     }
-
 @router.get("/realized_gains")
 def realized_gains(
+    brokers: Optional[List[BrokerType]] = Query(default=None),
     db: Session = Depends(get_session)
 ):
     """
     Sum up *all* realized gains across brokers/accounts.
     """
-    total = db.query(func.coalesce(func.sum(Gain.profit), 0)).scalar()
-    return {"realized_gain": total}
-
-@router.get("/realized_gains/by_broker/{broker}")
-def broker_realized_gains( broker: BrokerType, db: Session = Depends(get_session)):
-    """
-    Sum realized gains filtered by broker.
-    """
-    total = (
-        db.query(func.coalesce(func.sum(Gain.profit), 0))
-          .filter(Gain.broker == broker)
-          .scalar()
-    )
-    return {"broker": broker.value, "realized_gain": total}
-
+    query = db.query(func.coalesce(func.sum(Gain.profit), 0))
+    
+    if brokers:
+        query = query.filter(Gain.broker.in_(brokers))
+    
+    total = query.scalar()
+    
+    return {
+        "brokers": [b.value for b in brokers] if brokers else "all",
+        "realized_gain": total
+    }
 @router.get("/realized_gains/by_account/{account_id}")
 def get_account_realized_gains(account_id: str, db: Session = Depends(get_session)):
     """
@@ -300,11 +245,12 @@ def get_account_realized_gains(account_id: str, db: Session = Depends(get_sessio
           .scalar()
     )
     return {"account_id": account_id, "realized_gain": total}
-
 @router.get("/active_positions")
 def get_unrealized_lots(
     limit: int = 15, 
     order: str = "desc",
+    brokers: Optional[List[BrokerType]] = Query(default=None),
+    svc: CoinbaseService = Depends(get_coinbase_service),
     db: Session = Depends(get_session)
 ):
     """
@@ -313,8 +259,9 @@ def get_unrealized_lots(
     if order.lower() not in ["asc", "desc"]:
         raise HTTPException(status_code=400, detail="Order must be 'asc' or 'desc'")
     
-    query = db.query(Lot)
-    
+    query = db.query(Lot).filter(Lot.remaining > 0)
+    if brokers:
+        query = query.filter(Lot.broker.in_(brokers))
     if order.lower() == "desc":
         query = query.order_by(Lot.buy_time.desc())
     else:
@@ -323,15 +270,14 @@ def get_unrealized_lots(
     lots = query.limit(limit).all()
     formatted_lots = []
     for lot in lots:
-        formatted_lots.append(format_lot_response(lot))
+        formatted_lots.append(format_lot_response(lot, svc))
     return formatted_lots
-
-def format_lot_response(lot_data):
+def format_lot_response(lot, svc):
     # Calculate effective cost basis (cost per unit)
     effective_cost_basis = lot.cost / lot.quantity if lot.quantity > 0 else 0
     
     # Get current price and calculate unrealized gain
-    current_price = get_price(lot.asset)
+    current_price = svc.get_price(lot.asset)
     current_value = lot.remaining * Decimal(str(current_price))
     cost_of_remaining = (lot.cost / lot.quantity) * lot.remaining if lot.quantity > 0 else 0
     unrealized_gain = current_value - cost_of_remaining
@@ -346,11 +292,11 @@ def format_lot_response(lot_data):
         "buy_time": formatted_time,
         "unrealized_gain": f"${unrealized_gain:.2f}"
     }
-
 @router.get("/closed_positions")
 def get_realized_positions(
     limit: int = 15, 
     order: str = "desc",
+    brokers: Optional[List[BrokerType]] = Query(default=None),
     db: Session = Depends(get_session)
 ):
     """
@@ -360,7 +306,8 @@ def get_realized_positions(
         raise HTTPException(status_code=400, detail="Order must be 'asc' or 'desc'")
     
     query = db.query(Gain)
-    
+    if brokers:
+        query = query.filter(Gain.broker.in_(brokers))
     if order.lower() == "desc":
         query = query.order_by(Gain.matched_at.desc())
     else:
@@ -371,7 +318,6 @@ def get_realized_positions(
     for gain in gains:
        formatted_gains.append(format_gain_response(gain)) 
     return formatted_gains
-
 def format_gain_response(gain_data):
     # Parse the datetime string and format it
     formatted_date = gain_data.matched_at.strftime("%B %d, %Y at %I:%M %p")
@@ -383,16 +329,16 @@ def format_gain_response(gain_data):
         "profit": f"${gain_data.profit:.2f}",
         "sold_at": formatted_date
     }
-
-
-@router.get("/transactions/{limit}")
+@router.get("/transactions")
 def get_transactions(
     limit: int = 50,
     order: str = "desc",
+    brokers: Optional[List[BrokerType]] = Query(default=None),
     db: Session = Depends(get_session)
 ):
     query = db.query(Transaction)
-    
+    if brokers:
+        query = query.filter(Transaction.broker.in_(brokers))
     if order == "desc":
         query = query.order_by(Transaction.tx_time.desc())
     else:

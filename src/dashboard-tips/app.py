@@ -9,6 +9,18 @@ API_BASE = "http://127.0.0.1:8001/"
 
 # Server logic
 def server(input, output: Outputs, session):
+    
+
+    def build_broker_params(selected_brokers):
+        """
+        Build query parameters for broker filtering.
+        Returns empty string if both brokers selected (no filtering needed).
+        """
+        if not selected_brokers or len(selected_brokers) == 2:
+            return ""
+        
+        params = "&".join([f"brokers={broker}" for broker in selected_brokers])
+        return f"?{params}"
 
     def fetch_json(endpoint: str):
         """
@@ -24,9 +36,24 @@ def server(input, output: Outputs, session):
             print(e)
             return None
 
+    @render.ui
+    def val():
+        active_brokers = input.Exchanges()
+        broker_count = len(active_brokers)
+        if broker_count == 0:
+            return ui.p("No exchanges selected, showing all results", style="color: orange;")
+        elif broker_count == 2:
+            return ui.p("Showing all exchanges", style="color: green;")
+        else:
+            broker_name = active_brokers[0].title()
+            return ui.p(f"Filtering by: {broker_name}", style="color: blue;")
+
     @render.text
+    @reactive.calc
     def unrealized_gain():
-        data = fetch_json("unrealized_gains")
+        selected_brokers = input.Exchanges()
+        broker_params = build_broker_params(selected_brokers)
+        data = fetch_json("unrealized_gains" + broker_params)
         raw = data.get("unrealized_gain") if data else None
         try:
             gain = Decimal(raw or 0)
@@ -36,7 +63,9 @@ def server(input, output: Outputs, session):
 
     @render.text
     def realized_gain():
-        data = fetch_json("realized_gains")
+        selected_brokers = input.Exchanges()
+        broker_params = build_broker_params(selected_brokers)
+        data = fetch_json("realized_gains" + broker_params)
         raw = data.get("realized_gain") if data else None
         try:
             gain = Decimal(raw or 0)
@@ -50,29 +79,35 @@ def server(input, output: Outputs, session):
 
     @render.data_frame
     def unrealized_table():
-        return make_table("active_positions")
+        selected_brokers = input.Exchanges()
+        broker_params = build_broker_params(selected_brokers)
+        endpoint = "active_positions" + broker_params
+        return make_table(endpoint)
 
     @render.data_frame
     def realized_table():
-        return make_table("closed_positions")
+        selected_brokers = input.Exchanges()
+        broker_params = build_broker_params(selected_brokers)
+        endpoint = "closed_positions" + broker_params
+        return make_table(endpoint)
 
     @render.data_frame
     def transactions_table():
-        return make_table("transactions/15")
+        selected_brokers = input.Exchanges()
+        broker_params = build_broker_params(selected_brokers)
+        endpoint = "transactions" + broker_params
+        return make_table(endpoint)
 
-    @reactive.event(input.sync)
-    def _perform_sync():
-        if not acct:
-            session.show_notification("⚠️ Enter an account ID before syncing.", type="warning")
-            return
+
+
+    @reactive.effect
+    def perform_sync():
         try:
-            resp = requests.post(
-                f"{API_BASE}/transactions/update", json={"account_id": acct}
-            )
+            resp = requests.post(f"{API_BASE}transactions/cb_update")
             resp.raise_for_status()
-            session.show_notification("✅ Sync succeeded", type="message")
+            ui.notification_show("✅ Sync succeeded")
         except Exception as e:
-            session.show_notification(f"❌ Sync failed: {e}", type="error")
+            ui.notification_show(f"❌ Sync failed: {e}", type="error")
 
 # Define UI using Shiny Core
 app_ui = ui.page_sidebar(
@@ -85,6 +120,7 @@ app_ui = ui.page_sidebar(
                 "coinbase": ui.span("Coinbase"),
                 "schwab": ui.span("Schwab"),
             },
+            selected=["coinbase", "schwab"],
         ),
         ui.output_ui("val"),
     ),
