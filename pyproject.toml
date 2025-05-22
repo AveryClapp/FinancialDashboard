@@ -5,9 +5,17 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11.4"
 dependencies = [
+    "datetime>=5.5",
+    "faicons>=0.2.2",
     "fastapi>=0.115.11",
+    "pandas>=2.2.3",
+    "plotly>=6.1.1",
     "pymysql>=1.1.1",
     "python-dotenv>=1.0.1",
     "requests>=2.32.3",
+    "ridgeplot>=0.3.2",
+    "shiny>=1.4.0",
+    "shinywidgets>=0.6.2",
+    "sqlalchemy>=2.0.41",
     "uvicorn>=0.34.0",
 ]
