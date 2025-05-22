@@ -13,8 +13,8 @@ from enum import Enum
 Base = declarative_base()
 
 class BrokerType(Enum):
-    coinbase = "coinbase"
-    schwab = "schwab"
+    coinbase = "Coinbase"
+    schwab = "Schwab"
 
 
 class Transaction(Base):
