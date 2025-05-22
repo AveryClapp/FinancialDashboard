@@ -29,7 +29,7 @@ class CoinbaseService:
         self._CUTOFF = isoparse(_cutoff_raw)
         if self._CUTOFF.tzinfo is None:
             self._CUTOFF = self._CUTOFF.replace(tzinfo=timezone.utc)
-        self._CUTOFF = datetime.now(timezone.utc) - timedelta(minutes=118)
+        self._CUTOFF = datetime.now(timezone.utc) - timedelta(hours=23.5)
         self._client   = Client(api_id, api_secret)
         self._base_url = "https://api.coinbase.com"
         # populate self.assets right away

@@ -1,10 +1,10 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from dateutil.parser import isoparse
 from decimal import Decimal
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 
 from CoinbaseService.CoinbaseService import CoinbaseService
 from CoinbaseService.cb_hmac       import get_hmac_credentials
@@ -30,8 +30,8 @@ def get_coinbase_service() -> CoinbaseService:
     key, secret = get_hmac_credentials()
     return CoinbaseService(key, secret)
 
-@router.post("/transactions/update")
-def list_txns(
+@router.post("/transactions/cb_update")
+def update_txns(
     svc: CoinbaseService = Depends(get_coinbase_service),
     db: Session = Depends(get_session)
 ):
@@ -294,9 +294,126 @@ def get_account_realized_gains(account_id: str, db: Session = Depends(get_sessio
     Sum realized gains for a single account by joining Gain → Transaction.
     """
     total = (
-        db.query(func.coalesce(func.sum(Gain.profti), 0))
+        db.query(func.coalesce(func.sum(Gain.profit), 0))
           .join(Transaction, Transaction.tx_id == Gain.tx_id)
           .filter(Transaction.account_id == account_id)
           .scalar()
     )
     return {"account_id": account_id, "realized_gain": total}
+
+@router.get("/active_positions")
+def get_unrealized_lots(
+    limit: int = 15, 
+    order: str = "desc",
+    db: Session = Depends(get_session)
+):
+    """
+    Gets active positions
+    """
+    if order.lower() not in ["asc", "desc"]:
+        raise HTTPException(status_code=400, detail="Order must be 'asc' or 'desc'")
+    
+    query = db.query(Lot)
+    
+    if order.lower() == "desc":
+        query = query.order_by(Lot.buy_time.desc())
+    else:
+        query = query.order_by(Lot.buy_time.asc())
+    
+    lots = query.limit(limit).all()
+    formatted_lots = []
+    for lot in lots:
+        formatted_lots.append(format_lot_response(lot))
+    return formatted_lots
+
+def format_lot_response(lot_data):
+    # Calculate effective cost basis (cost per unit)
+    effective_cost_basis = lot.cost / lot.quantity if lot.quantity > 0 else 0
+    
+    # Get current price and calculate unrealized gain
+    current_price = get_price(lot.asset)
+    current_value = lot.remaining * Decimal(str(current_price))
+    cost_of_remaining = (lot.cost / lot.quantity) * lot.remaining if lot.quantity > 0 else 0
+    unrealized_gain = current_value - cost_of_remaining
+    
+    formatted_time = lot.buy_time.strftime("%B %d, %Y at %I:%M %p")
+    
+    return {
+        "quantity": f"{lot.remaining:.8f}",
+        "effective_cost_basis": f"{effective_cost_basis:.2f}",
+        "cost_remaining": f"${cost_of_remaining:.2f}",
+        "broker": lot.broker.value.title(),
+        "buy_time": formatted_time,
+        "unrealized_gain": f"${unrealized_gain:.2f}"
+    }
+
+@router.get("/closed_positions")
+def get_realized_positions(
+    limit: int = 15, 
+    order: str = "desc",
+    db: Session = Depends(get_session)
+):
+    """
+    Gets active positions
+    """
+    if order.lower() not in ["asc", "desc"]:
+        raise HTTPException(status_code=400, detail="Order must be 'asc' or 'desc'")
+    
+    query = db.query(Gain)
+    
+    if order.lower() == "desc":
+        query = query.order_by(Gain.matched_at.desc())
+    else:
+        query = query.order_by(Gain.matched_at.asc())
+    
+    gains = query.limit(limit).all()
+    formatted_gains = []
+    for gain in gains:
+       formatted_gains.append(format_gain_response(gain)) 
+    return formatted_gains
+
+def format_gain_response(gain_data):
+    # Parse the datetime string and format it
+    formatted_date = gain_data.matched_at.strftime("%B %d, %Y at %I:%M %p")
+    
+    return {
+        "broker": gain_data.broker,
+        "asset": gain_data.asset,
+        "quantity": f"{gain_data.quantity:.8f}",
+        "profit": f"${gain_data.profit:.2f}",
+        "sold_at": formatted_date
+    }
+
+
+@router.get("/transactions/{limit}")
+def get_transactions(
+    limit: int = 50,
+    order: str = "desc",
+    db: Session = Depends(get_session)
+):
+    query = db.query(Transaction)
+    
+    if order == "desc":
+        query = query.order_by(Transaction.tx_time.desc())
+    else:
+        query = query.order_by(Transaction.tx_time.asc())
+    
+    transactions = query.limit(limit).all()
+    
+    # Format the response
+    formatted_transactions = []
+    for tx in transactions:
+        # Calculate price per unit
+        price_per_unit = tx.cost_usd / tx.quantity if tx.quantity > 0 else 0
+        
+        formatted_transactions.append({
+            "broker": tx.broker.value.title(),
+            "asset": tx.asset,
+            "transaction_type": tx.tx_type.replace('_', ' ').title(),
+            "quantity": f"{tx.quantity:.8f}",
+            "total_cost": f"${tx.cost_usd:.2f}",
+            "price_per_unit": f"${price_per_unit:.2f}",
+            "transaction_time": tx.tx_time.strftime("%B %d, %Y at %I:%M %p")
+        })
+    
+    return formatted_transactions
