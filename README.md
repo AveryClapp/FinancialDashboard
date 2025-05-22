@@ -12,3 +12,5 @@ Simple one page design for easier investment tracking across platforms.
 - Automatic Alerts/Pricing updates
 #### Really nice to haves
 - Mobile App (for fun)
+
+### Buy price is cooked (a little skewed upwards because of transaction fee not being included)
